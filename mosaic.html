@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#131518">
+<title>MOSAIC — a camera that builds the picture out of emoji</title>
+<meta name="description" content="Every emoji is rendered and measured at startup, then each tile of the picture is filled with whichever one actually matches the colour beneath it. Your camera feed never leaves your device.">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="Mosaic — a camera that builds the picture out of emoji">
+<meta property="og:description" content="Each emoji is measured for its true colour, then the picture is assembled from whichever ones match. Your camera feed never leaves your device.">
+<meta property="og:image" content="share.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mosaic — a camera that builds the picture out of emoji">
+<meta name="twitter:description" content="Each emoji is measured for its true colour, then the picture is assembled from whichever ones match.">
+<meta name="twitter:image" content="share.png">
+
+<style>
+  :root{
+    --void:#131518;
+    --card:#E8E4D9;
+    --ink:#1F1D18;
+    --ink-soft:#6a6558;
+    --gold:#C08A2E;
+    --lapis:#2E5FA3;
+    --rule:rgba(31,29,24,.22);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;margin:0;background:var(--void);overflow:hidden;}
+  body{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    color:var(--ink);
+    -webkit-user-select:none;user-select:none;
+  }
+  #stage{position:fixed;top:0;left:0;width:100%;height:100%;display:block;touch-action:none;}
+  video{position:fixed;width:2px;height:2px;opacity:0;pointer-events:none;top:0;left:0;}
+
+  #hud{
+    position:fixed;top:0;left:0;right:0;z-index:30;
+    padding:calc(env(safe-area-inset-top,0px) + 12px) 15px 12px;
+    display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+    pointer-events:none;
+  }
+  #hud .stack{text-shadow:0 1px 6px rgba(0,0,0,.9);}
+  #hud .n{font-size:12px;font-weight:700;letter-spacing:.3em;text-transform:uppercase;color:#EFEBE0;margin:0 0 3px;}
+  #hud .sub{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:rgba(239,235,224,.6);margin:0;}
+  #recDot{
+    display:none;align-items:center;gap:7px;flex:none;
+    font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#EFEBE0;
+    background:rgba(19,21,24,.7);padding:5px 9px;border-radius:20px;
+  }
+  #recDot.on{display:flex;}
+  #recDot i{width:7px;height:7px;border-radius:50%;background:var(--gold);animation:pulse 1.1s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+  #deck{
+    position:fixed;left:0;right:0;bottom:0;z-index:40;
+    padding:0 18px calc(env(safe-area-inset-bottom,0px) + 20px);
+    display:flex;align-items:center;justify-content:space-between;gap:14px;
+    pointer-events:none;
+  }
+  #deck > *{pointer-events:auto;}
+  .tab{
+    font:inherit;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+    background:var(--card);color:var(--ink);
+    border:0;padding:11px 13px;cursor:pointer;min-width:74px;
+    box-shadow:0 4px 16px rgba(0,0,0,.55);
+  }
+  .tab.on{background:var(--gold);color:var(--void);}
+  #bShot{
+    width:72px;height:72px;border-radius:50%;flex:none;cursor:pointer;padding:0;
+    background:var(--card);border:3px solid rgba(19,21,24,.62);
+    box-shadow:0 5px 22px rgba(0,0,0,.6), inset 0 0 0 3px rgba(232,228,217,.95);
+    transition:transform .1s;
+  }
+  #bShot:active{transform:scale(.92);}
+  #bRec{
+    width:52px;height:52px;border-radius:50%;flex:none;cursor:pointer;padding:0;position:relative;
+    background:rgba(19,21,24,.5);border:2px solid rgba(232,228,217,.9);
+    transition:transform .1s;
+  }
+  #bRec:after{
+    content:"";position:absolute;left:50%;top:50%;
+    width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;
+    background:var(--gold);transition:all .18s;
+  }
+  #bRec.on:after{width:17px;height:17px;margin:-8.5px 0 0 -8.5px;border-radius:3px;}
+  #bRec:active{transform:scale(.92);}
+
+  #scrim{
+    position:fixed;top:0;left:0;right:0;bottom:0;z-index:44;
+    background:rgba(19,21,24,.45);opacity:0;visibility:hidden;
+    transition:opacity .25s,visibility .25s;
+  }
+  #scrim.on{opacity:1;visibility:visible;}
+  #sheet{
+    position:fixed;left:0;right:0;bottom:0;z-index:46;
+    max-height:48vh;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    background:rgba(232,228,217,.96);
+    -webkit-backdrop-filter:blur(9px);backdrop-filter:blur(9px);
+    padding:24px 16px calc(env(safe-area-inset-bottom,0px) + 18px);
+    transform:translateY(102%);
+    transition:transform .3s cubic-bezier(.2,.8,.25,1), opacity .18s;
+    box-shadow:0 -10px 34px rgba(0,0,0,.6);
+  }
+  #sheet.on{transform:translateY(0);}
+  /* a course of tesserae */
+  #sheet:before{
+    content:"";position:absolute;top:0;left:0;right:0;height:8px;
+    background-image:repeating-linear-gradient(to right,
+      #2E5FA3 0 7px, transparent 7px 9px,
+      #C08A2E 9px 16px, transparent 16px 18px,
+      #8C3B2E 18px 25px, transparent 25px 27px,
+      #3F6E4B 27px 34px, transparent 34px 36px);
+    opacity:.75;
+  }
+  #sheet h2{font-size:9.5px;font-weight:400;letter-spacing:.3em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 3px;}
+  #sheet .big{font-size:15px;font-weight:700;letter-spacing:.03em;margin:0 0 14px;}
+
+  .row{display:flex;gap:5px;flex-wrap:wrap;}
+  button.b{
+    font:inherit;font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+    background:transparent;color:var(--ink);
+    border:1px solid var(--rule);padding:9px 6px;cursor:pointer;flex:1 1 22%;min-width:0;
+    transition:background .14s,color .14s,border-color .14s;
+  }
+  button.b:active{background:var(--ink);color:var(--card);}
+  button.b.on{background:var(--lapis);border-color:var(--lapis);color:var(--card);}
+  button:focus-visible{outline:2px solid var(--gold);outline-offset:2px;}
+
+  .grid2{display:flex;flex-wrap:wrap;gap:0 18px;}
+  .field{margin:14px 0 0;flex:1 1 190px;}
+  .field > label{
+    display:flex;justify-content:space-between;align-items:baseline;
+    font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-soft);
+    margin-bottom:4px;
+  }
+  .field > label b{font-weight:400;color:var(--ink);font-variant-numeric:tabular-nums;}
+  .note{font-size:9px;letter-spacing:.09em;line-height:1.8;color:var(--ink-soft);margin:16px 0 0;text-transform:uppercase;}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:18px;background:transparent;margin:0;display:block;
+  }
+  input[type=range]::-webkit-slider-runnable-track{height:1px;background:var(--rule);}
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;appearance:none;width:12px;height:12px;margin-top:-6px;
+    background:var(--ink);border:0;border-radius:0;
+  }
+  input[type=range]::-moz-range-track{height:1px;background:var(--rule);}
+  input[type=range]::-moz-range-thumb{width:12px;height:12px;background:var(--ink);border:0;border-radius:0;}
+
+  .seg{display:flex;border:1px solid var(--rule);}
+  .seg button{border:0;border-right:1px solid var(--rule);flex:1 1 0;padding:9px 3px;}
+  .seg button:last-child{border-right:0;}
+
+  .credit{
+    display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;
+    margin:18px 0 0;padding-top:14px;border-top:1px solid var(--rule);
+    font-size:9px;letter-spacing:.13em;text-transform:uppercase;
+  }
+  .credit a{color:inherit;text-decoration:none;border-bottom:1px solid currentColor;opacity:.75;}
+  .credit span{opacity:.55;}
+
+  #gate{
+    position:fixed;top:0;left:0;right:0;bottom:0;z-index:60;background:var(--void);
+    display:flex;align-items:center;justify-content:center;padding:30px;
+  }
+  #gate .card{background:var(--card);padding:26px 26px 24px;max-width:340px;width:100%;position:relative;}
+  #gate .card:before{
+    content:"";position:absolute;top:0;left:0;right:0;height:8px;
+    background-image:repeating-linear-gradient(to right,
+      #2E5FA3 0 7px, transparent 7px 9px,
+      #C08A2E 9px 16px, transparent 16px 18px,
+      #8C3B2E 18px 25px, transparent 25px 27px,
+      #3F6E4B 27px 34px, transparent 34px 36px);
+    opacity:.75;
+  }
+  #gate h1{font-size:15px;font-weight:700;letter-spacing:.36em;text-transform:uppercase;margin:14px 0 10px;}
+  #gate p{font-size:10px;line-height:1.9;letter-spacing:.09em;color:var(--ink-soft);margin:0 0 18px;text-transform:uppercase;}
+  #gate button{width:100%;flex:none;padding:12px;font-size:10px;border-color:var(--ink);}
+  #err{margin-top:13px;font-size:10px;line-height:1.7;color:#B4472B;letter-spacing:.03em;text-transform:none;display:none;}
+
+  #flash{position:fixed;top:0;left:0;right:0;bottom:0;background:#fff;opacity:0;pointer-events:none;z-index:50;}
+  #toast{
+    position:fixed;left:50%;bottom:120px;transform:translateX(-50%);z-index:55;
+    background:rgba(19,21,24,.92);color:var(--card);
+    font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+    padding:9px 14px;opacity:0;transition:opacity .25s;pointer-events:none;max-width:82%;text-align:center;
+  }
+  #toast.on{opacity:1;}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
+  @media (min-width:760px){
+    #sheet{left:auto;right:20px;bottom:20px;width:430px;max-height:76vh;transform:translateY(120%);}
+    #sheet.on{transform:translateY(0);}
+  }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+<video id="vid" playsinline autoplay muted></video>
+<div id="flash"></div>
+
+<div id="hud">
+  <div class="stack">
+    <p class="n">Mosaic</p>
+    <p class="sub" id="hSub">measuring tiles…</p>
+  </div>
+  <span id="recDot"><i></i><span id="recTime">0:00</span></span>
+</div>
+
+<div id="deck">
+  <button class="tab" id="bSetup">Setup</button>
+  <button id="bShot" aria-label="Snapshot"></button>
+  <button id="bRec" aria-label="Record video"></button>
+</div>
+
+<div id="scrim"></div>
+
+<div id="sheet">
+  <h2>Mosaic</h2>
+  <p class="big">Assembled from emoji</p>
+
+  <div class="field">
+    <label>Match</label>
+    <div class="seg" id="segMatch">
+      <button class="b on" data-v="colour">Colour</button>
+      <button class="b" data-v="tone">Tone</button>
+      <button class="b" data-v="random">Random</button>
+    </div>
+  </div>
+  <div class="field">
+    <label>Ground</label>
+    <div class="seg" id="segGround">
+      <button class="b on" data-v="dark">Dark</button>
+      <button class="b" data-v="paper">Paper</button>
+      <button class="b" data-v="live">Live</button>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="field"><label>Tile <b id="vTile">22</b></label><input type="range" id="sTile" min="8" max="56" value="22"></div>
+    <div class="field"><label>Grout <b id="vGap">8</b></label><input type="range" id="sGap" min="0" max="45" value="8"></div>
+    <div class="field"><label>Punch <b id="vPunch">45</b></label><input type="range" id="sPunch" min="0" max="100" value="45"></div>
+    <div class="field"><label>Settle <b id="vSettle">55</b></label><input type="range" id="sSettle" min="0" max="100" value="55"></div>
+  </div>
+  <div class="field">
+    <div class="row">
+      <button class="b" id="bHold">Hold</button>
+      <button class="b" id="bFlip">Flip</button>
+      <button class="b" id="bMic">Sound off</button>
+      <button class="b on" id="bFmt">MP4</button>
+      <button class="b" id="bAspect">Reel 9:16</button>
+      <button class="b" id="bClose">Close</button>
+    </div>
+  </div>
+  <p class="note">Every emoji was drawn once at startup and its true average colour measured, allowing for how much of the tile it actually covers and what shows through behind it. Each tile then takes whichever emoji genuinely matches the colour under it. Settle stops them flickering between near-equal matches. Random abandons matching altogether, which is worth seeing once.</p>
+
+  <div class="credit">
+    <a href="https://x.com/minted_i">By Yoshi Babaganoush</a>
+    <span>Your camera feed never leaves your device</span>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="gate">
+  <div class="card">
+    <h1>Mosaic</h1>
+    <p>A camera that rebuilds what it sees out of emoji, choosing each one by measuring what colour it truly is.</p>
+    <button id="bStart">Measure the tiles</button>
+    <div id="err"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var vid   = document.getElementById('vid');
+  var stage = document.getElementById('stage');
+  var ctx   = stage.getContext('2d');
+  var gate  = document.getElementById('gate');
+  var errEl = document.getElementById('err');
+  var flash = document.getElementById('flash');
+  var sheet = document.getElementById('sheet');
+  var scrim = document.getElementById('scrim');
+  var toastEl = document.getElementById('toast');
+  var hSub  = document.getElementById('hSub');
+
+  var W=0,H=0,DPR=1;
+  var facing='user', stream=null, ready=false, held=false;
+
+  var opt={ match:'colour', ground:'dark', tile:22, gap:8, punch:45, settle:55 };
+
+  var raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame ||
+            function(f){ return setTimeout(f,16); };
+  var now = function(){
+    return (window.performance && performance.now) ? performance.now() : Date.now();
+  };
+
+  var toastT=null;
+  function toast(m){
+    toastEl.textContent=m;
+    toastEl.className='on';
+    if(toastT) clearTimeout(toastT);
+    toastT=setTimeout(function(){ toastEl.className=''; },2600);
+  }
+
+  /* =========================================================
+     The tile set. Objects, food, nature and shapes — chosen to
+     cover the colour wheel, not to depict anybody.
+     ========================================================= */
+  var SET = (
+    '🍎🍅🌹❤️🔴🟥🧧🎈🚗🍒🦞🧨📕🔺🥩🏮🎒🚨🧃🍓🈲🅰️'+
+    '🍊🎃🦊🏀🥕🧡🟠🟧🍑🔶🏵️🥭🧆🦐🍯🪵🚸🛎️🥮🏜️'+
+    '🌻🍋🌟⭐🟡🟨🧀🍌🐤💛🔆🌕🍺🥇🚕🚌📒🔔🌽🧽😀😄😊🙂🤩😎🥳'+
+    '🍏🌿🐸🟢🟩🥦🍀💚🐢🥝🌲🌳🥬🫑🐍🧩💵🎾🪴🌵🦖🧪🐉'+
+    '🌊💙🔵🟦🫐🐳🦋👖🌀💧🩵🏊🧊🔷🚙🗻🐟🎽🫧🪟📘🥶'+
+    '🍇💜🟣🟪🔮🧿🪻🦄🎆👾🟰🫒🍆👚🎇🔯'+
+    '🌸💗🐷🩷🌷🎀💖🐖🌺💕🦩🧠👅🍬🩰'+
+    '🐻🟤🟫🍫🥔🪵🧱🥐🥖🦉🐴🏈🥥🍩🪑🧳🦫🍪'+
+    '⚫⬛🖤🕶️🎩🌑🎱🕳️♠️♣️🔌📷🎤'+
+    '⚪⬜🤍🥚☁️🦢🍚🧻🦷🕊️🥛📄🧂🩹'+
+    '🌫️🪨🐘⚙️🔩🗿🦈🔗🖇️🎣🔫🛹🩶🎿🕹️📎'+
+    '🥔🍞🧅🥯🪵🦴🧸🐪🏺📦🧇🥞🫓🍘🥜🪺🐫🦙🍄‍🟫🧴🪑🚪🎻🪕🥁'+
+    '🏺🍮🥧🧈🌾🪶🐁🦡🪆🥠🫖🧺🪣🩴🧦👝👜💼🪞'+
+    '🫘🍂🌰🦇🕷️🎼🖤🪤🔒🎥📿🕰️🥃🍷🧳🛢️🗄️🧲🔭🎺'+
+    '🌅🌄🌇🌆🌃🌉🎑🏞️🏜️🏝️🏔️🌋🗻🏕️'
+  );
+
+  var pal=[], atlas=null, actx=null, AT=48, ACOLS=24;
+  var lut=null, toneLut=null;
+
+  function splitEmoji(s){
+    var out=[], i=0, c, cp;
+    while(i<s.length){
+      cp=s.codePointAt(i);
+      c=String.fromCodePoint(cp);
+      i+=c.length;
+      // absorb variation selectors and joiners onto the previous glyph
+      while(i<s.length){
+        var n=s.codePointAt(i);
+        if(n===0xFE0F || n===0x200D || (n>=0x1F3FB && n<=0x1F3FF)){
+          var extra=String.fromCodePoint(n);
+          c+=extra; i+=extra.length;
+          if(n===0x200D && i<s.length){
+            var j=s.codePointAt(i), je=String.fromCodePoint(j);
+            c+=je; i+=je.length;
+          }
+        } else break;
+      }
+      out.push(c);
+    }
+    return out;
+  }
+
+  function measure(){
+    var cand=splitEmoji(SET);
+    var probe=document.createElement('canvas');
+    probe.width=AT; probe.height=AT;
+    var p=probe.getContext('2d');
+    var seen={}, i, j, d, r, g, b, k, cov, sig, key;
+
+    for(i=0;i<cand.length;i++){
+      p.clearRect(0,0,AT,AT);
+      p.textAlign='center';
+      p.textBaseline='middle';
+      p.font=Math.round(AT*0.84)+'px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+      p.fillText(cand[i], AT/2, AT/2);
+      try { d=p.getImageData(0,0,AT,AT).data; } catch(e){ return; }
+      r=0;g=0;b=0;k=0;sig='';
+      for(j=0;j<d.length;j+=4){
+        if(d[j+3]>40){ r+=d[j]; g+=d[j+1]; b+=d[j+2]; k++; if(sig.length<180) sig+=(j>>2)+','; }
+      }
+      cov=k/(AT*AT);
+      if(cov<0.05) continue;                 // did not render
+      key=sig+'|'+((r/k)|0)+','+((g/k)|0)+','+((b/k)|0);
+      if(seen[key]) continue;                // a repeat of the missing-glyph box
+      seen[key]=1;
+      pal.push({ ch:cand[i], r:r/k, g:g/k, b:b/k, cov:cov });
+    }
+
+    // one atlas, blitted from here on
+    var rowsA=Math.ceil(pal.length/ACOLS);
+    atlas=document.createElement('canvas');
+    atlas.width=ACOLS*AT; atlas.height=Math.max(1,rowsA)*AT;
+    actx=atlas.getContext('2d');
+    actx.clearRect(0,0,atlas.width,atlas.height);
+    actx.textAlign='center';
+    actx.textBaseline='middle';
+    actx.font=Math.round(AT*0.84)+'px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+    for(i=0;i<pal.length;i++){
+      actx.fillText(pal[i].ch, (i%ACOLS)*AT + AT/2, ((i/ACOLS)|0)*AT + AT/2);
+    }
+
+    hSub.textContent = pal.length + ' tiles measured';
+  }
+
+  /* what a tile really looks like once the ground shows through */
+  function effective(t, gr){
+    var a=t.cov;
+    return {
+      r: t.r*a + gr[0]*(1-a),
+      g: t.g*a + gr[1]*(1-a),
+      b: t.b*a + gr[2]*(1-a)
+    };
+  }
+
+  function groundRGB(){
+    if(opt.ground==='paper') return [232,228,217];
+    return [19,21,24];
+  }
+
+  /* a lookup from any colour to its nearest tile, built once per ground */
+  function buildLut(){
+    if(!pal.length) return;
+    var gr=groundRGB();
+    var eff=[], i;
+    for(i=0;i<pal.length;i++) eff.push(effective(pal[i], gr));
+
+    lut=new Uint16Array(32768);
+    var r,g,b,best,bd,dr,dg,db,dd,R,G,B;
+    for(r=0;r<32;r++){
+      R=r*8+4;
+      for(g=0;g<32;g++){
+        G=g*8+4;
+        for(b=0;b<32;b++){
+          B=b*8+4;
+          best=0; bd=1e12;
+          for(i=0;i<eff.length;i++){
+            dr=R-eff[i].r; dg=G-eff[i].g; db=B-eff[i].b;
+            dd=2*dr*dr + 4*dg*dg + 3*db*db;   // weighted toward how the eye sees
+            if(dd<bd){ bd=dd; best=i; }
+          }
+          lut[(r<<10)|(g<<5)|b]=best;
+        }
+      }
+    }
+
+    // and a tonal ramp, for when hue is not wanted
+    var byLum=[];
+    for(i=0;i<pal.length;i++){
+      byLum.push({ i:i, l:0.2126*eff[i].r + 0.7152*eff[i].g + 0.0722*eff[i].b });
+    }
+    byLum.sort(function(a,b){ return a.l-b.l; });
+    toneLut=new Uint16Array(256);
+    for(i=0;i<256;i++){
+      toneLut[i]=byLum[Math.min(byLum.length-1, Math.round(i/255*(byLum.length-1)))].i;
+    }
+  }
+
+  /* ---------- grid ---------- */
+  var cols=0, rows=0, TS=0;
+  var src=document.createElement('canvas'), sx2=src.getContext('2d');
+  var pixels=null, cell=null, rnd=null;
+
+  function buildGrid(){
+    TS=Math.max(4, Math.round(opt.tile*DPR));
+    cols=Math.max(1, Math.ceil(stage.width/TS));
+    rows=Math.max(1, Math.ceil(stage.height/TS));
+    src.width=cols; src.height=rows;
+    cell=new Uint16Array(cols*rows);
+    rnd=new Uint16Array(cols*rows);
+    var i;
+    for(i=0;i<rnd.length;i++) rnd[i]=(Math.random()*Math.max(1,pal.length))|0;
+  }
+
+  /* ---------- sizing ---------- */
+  function resize(){
+    DPR=Math.min(window.devicePixelRatio||1,2);
+    W=stage.clientWidth; H=stage.clientHeight;
+    stage.width=Math.round(W*DPR/2)*2;
+    stage.height=Math.round(H*DPR/2)*2;
+    if(ready) buildGrid();
+  }
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', function(){ setTimeout(resize,300); });
+
+  /* ---------- camera ---------- */
+  function stopStream(){
+    if(stream){
+      var t=stream.getTracks(), i;
+      for(i=0;i<t.length;i++) t[i].stop();
+      stream=null;
+    }
+    try { vid.srcObject=null; } catch(e){}
+  }
+  function askCam(fm){
+    var v={ width:{ideal:1280}, height:{ideal:960} };
+    if(fm) v.facingMode=fm;
+    return navigator.mediaDevices.getUserMedia({ video:v, audio:false });
+  }
+  function start(){
+    var insecure=(location.protocol==='http:') &&
+                 location.hostname!=='localhost' && location.hostname!=='127.0.0.1';
+    if(insecure || window.isSecureContext===false){
+      var secure='https://'+location.host+location.pathname+location.search;
+      errEl.innerHTML='This page is loading over an insecure connection, so the browser will not '+
+        'release the camera. <a href="'+secure+'" style="color:inherit">Open the https version →</a>';
+      errEl.style.display='block';
+      return;
+    }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      fail('This browser will not hand over a camera. Try Chrome, Edge, Firefox or Safari.');
+      return;
+    }
+    stopStream();
+    askCam({exact:facing})
+      ['catch'](function(){ return askCam(facing); })
+      ['catch'](function(){ return askCam(null); })
+      .then(function(s){
+        stream=s; vid.srcObject=s;
+        var p=vid.play();
+        if(p && p['catch']) p['catch'](function(){});
+        vid.addEventListener('loadedmetadata', begin);
+        if(vid.videoWidth) begin();
+      })['catch'](function(e){
+        fail('No camera. ' + (e && e.name ? e.name : '') + ' — check the permission for this page in your browser settings, then reload.');
+      });
+  }
+  function fail(m){ errEl.textContent=m; errEl.style.display='block'; }
+
+  function begin(){
+    if(ready) return;
+    ready=true;
+    gate.style.display='none';
+    if(!pal.length){ measure(); buildLut(); }
+    resize(); buildGrid(); tick();
+  }
+
+  function grab(){
+    if(!vid.videoWidth || !cols) return false;
+    var vw=vid.videoWidth, vh=vid.videoHeight;
+    var vr=vw/vh, cr=(cols*TS)/(rows*TS), ax=0, ay=0, aw=vw, ah=vh;
+    if(vr>cr){ aw=vh*cr; ax=(vw-aw)/2; } else { ah=vw/cr; ay=(vh-ah)/2; }
+    sx2.save();
+    if(facing==='user'){ sx2.translate(cols,0); sx2.scale(-1,1); }
+    sx2.drawImage(vid, ax,ay,aw,ah, 0,0,cols,rows);
+    sx2.restore();
+    try { pixels=sx2.getImageData(0,0,cols,rows).data; } catch(e){ return false; }
+    return true;
+  }
+
+  /* ---------- stretch the light in the room across the whole range ---------- */
+  var loV=0, hiV=255, levelled=false;
+  var hist=new Int32Array(64);
+  function levels(){
+    if(!pixels) return;
+    var n=cols*rows, i, o, l, k, cum, target, lo=0, hi=255;
+    for(k=0;k<64;k++) hist[k]=0;
+    for(i=0;i<n;i++){
+      o=i*4;
+      l=(0.2126*pixels[o] + 0.7152*pixels[o+1] + 0.0722*pixels[o+2])|0;
+      hist[l>>2]++;
+    }
+    target=n*0.04; cum=0;
+    for(k=0;k<64;k++){ cum+=hist[k]; if(cum>=target){ lo=k*4; break; } }
+    target=n*0.04; cum=0;
+    for(k=63;k>=0;k--){ cum+=hist[k]; if(cum>=target){ hi=k*4+3; break; } }
+    if(hi-lo<24) hi=lo+24;
+    if(hi>255){ hi=255; lo=231; }
+    if(!levelled){ loV=lo; hiV=hi; levelled=true; }
+    else { loV=loV*0.9+lo*0.1; hiV=hiV*0.9+hi*0.1; }
+  }
+
+  /* ---------- choose a tile for every cell ---------- */
+  function choose(){
+    if(!pal.length) return;
+    var n=cols*rows, i, o, r, g, b, l, lum, mx, mn, sat;
+    var span=hiV-loV; if(span<1) span=1;
+    var punch=1 + (opt.punch/100)*1.6;
+    var stick=(opt.settle/100)*0.8;
+    var mode=opt.match, want;
+
+    for(i=0;i<n;i++){
+      o=i*4;
+      r=pixels[o]; g=pixels[o+1]; b=pixels[o+2];
+
+      // lift the exposure, then push the colour away from grey
+      r=(r-loV)/span*255; g=(g-loV)/span*255; b=(b-loV)/span*255;
+      lum=0.2126*r + 0.7152*g + 0.0722*b;
+      r=lum+(r-lum)*punch; g=lum+(g-lum)*punch; b=lum+(b-lum)*punch;
+      if(r<0)r=0; else if(r>255)r=255;
+      if(g<0)g=0; else if(g>255)g=255;
+      if(b<0)b=0; else if(b>255)b=255;
+
+      if(mode==='random'){
+        want=rnd[i] % pal.length;
+      } else if(mode==='tone'){
+        l=0.2126*r + 0.7152*g + 0.0722*b;
+        want=toneLut[l|0];
+      } else {
+        want=lut[(((r|0)>>3)<<10) | (((g|0)>>3)<<5) | ((b|0)>>3)];
+      }
+
+      // hold the previous tile unless the new one is a clearly better fit
+      if(cell[i]!==want && stick>0 && Math.random()<stick){
+        // keep what is already there
+      } else {
+        cell[i]=want;
+      }
+    }
+  }
+
+  function draw(){
+    if(!pal.length) return;
+    var SWp=stage.width, SHp=stage.height;
+    var gr=opt.ground;
+
+    ctx.globalCompositeOperation='source-over';
+    ctx.globalAlpha=1;
+    if(gr==='live'){
+      ctx.drawImage(src,0,0,SWp,SHp);
+      ctx.fillStyle='rgba(19,21,24,.45)';
+      ctx.fillRect(0,0,SWp,SHp);
+    } else {
+      ctx.fillStyle = gr==='paper' ? '#E8E4D9' : '#131518';
+      ctx.fillRect(0,0,SWp,SHp);
+    }
+
+    var gap=(opt.gap/100)*TS;
+    var d=TS-gap;
+    if(d<2) d=2;
+    var off=(TS-d)/2;
+    var c,r2,i,t;
+    for(r2=0;r2<rows;r2++){
+      for(c=0;c<cols;c++){
+        i=r2*cols+c;
+        t=cell[i];
+        ctx.drawImage(atlas, (t%ACOLS)*AT, ((t/ACOLS)|0)*AT, AT, AT,
+                      c*TS+off, r2*TS+off, d, d);
+      }
+    }
+    drawGuide();
+  }
+
+  function tick(){
+    if(grab()){
+      levels();
+      if(!held) choose();
+      draw();
+    }
+    if(recording){ paintRec(); tickTime(); }
+    raf(tick);
+  }
+
+  /* ---------- frame guide ---------- */
+  function frameRatio(){
+    if(recAspect==='reel')   return 9/16;
+    if(recAspect==='square') return 1;
+    if(recAspect==='wide')   return 16/9;
+    return (W&&H) ? (W/H) : (9/16);
+  }
+  function drawGuide(){
+    if(recAspect==='screen') return;
+    var SW2=stage.width, SH2=stage.height;
+    var ar=frameRatio(), cw, ch;
+    if(SW2/SH2 > ar){ ch=SH2; cw=SH2*ar; } else { cw=SW2; ch=SW2/ar; }
+    var x=(SW2-cw)/2, y=(SH2-ch)/2;
+    if(cw>=SW2-1 && ch>=SH2-1) return;
+    var w=Math.max(2,Math.round(SW2/460)), ins=w*1.5;
+    x+=ins; y+=ins; cw-=ins*2; ch-=ins*2;
+    var len=Math.round(Math.min(cw,ch)*0.055);
+    var corners=[[x,y,1,1],[x+cw,y,-1,1],[x,y+ch,1,-1],[x+cw,y+ch,-1,-1]];
+    var pass,i,c;
+    ctx.save();
+    for(pass=0;pass<2;pass++){
+      ctx.strokeStyle = pass ? 'rgba(255,255,255,.9)' : 'rgba(0,0,0,.4)';
+      ctx.lineWidth   = pass ? w : w*3;
+      ctx.beginPath();
+      for(i=0;i<4;i++){
+        c=corners[i];
+        ctx.moveTo(c[0]+c[2]*len, c[1]);
+        ctx.lineTo(c[0], c[1]);
+        ctx.lineTo(c[0], c[1]+c[3]*len);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* ---------- delivery canvas ---------- */
+  var recCan=document.createElement('canvas'), recCtx=recCan.getContext('2d');
+  var recFmt='mp4', recAspect='reel';
+  function setupRecCanvas(){
+    var ar=frameRatio(), w, h;
+    if(ar>=1){ w=1920; h=Math.round(w/ar); if(h>1080){ h=1080; w=Math.round(h*ar); } }
+    else     { h=1920; w=Math.round(h*ar); if(w>1080){ w=1080; h=Math.round(w/ar); } }
+    w=Math.max(2,Math.round(w/2)*2);
+    h=Math.max(2,Math.round(h/2)*2);
+    if(recCan.width!==w || recCan.height!==h){ recCan.width=w; recCan.height=h; }
+  }
+  function paintRec(){
+    var sw=stage.width, sh=stage.height, dw=recCan.width, dh=recCan.height;
+    if(!sw||!sh||!dw||!dh) return;
+    var sr=sw/sh, dr=dw/dh, cx=0, cy=0, cw=sw, ch=sh;
+    if(sr>dr){ cw=sh*dr; cx=(sw-cw)/2; } else { ch=sw/dr; cy=(sh-ch)/2; }
+    recCtx.imageSmoothingEnabled=true;
+    recCtx.drawImage(stage, cx,cy,cw,ch, 0,0,dw,dh);
+  }
+
+  /* ---------- stills ---------- */
+  function shutterFlash(){
+    flash.style.transition='none';
+    flash.style.opacity='.8';
+    setTimeout(function(){
+      flash.style.transition='opacity .45s';
+      flash.style.opacity='0';
+    },60);
+  }
+  function saveUrl(url,name){
+    var a=document.createElement('a');
+    if('download' in a){
+      a.href=url; a.download=name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    } else { window.open(url,'_blank'); }
+  }
+  document.getElementById('bShot').addEventListener('click', function(){
+    shutterFlash();
+    var url;
+    try { url=stage.toDataURL('image/png'); } catch(e){ toast('Could not save'); return; }
+    saveUrl(url,'mosaic-'+Date.now()+'.png');
+    toast(pal.length+' tiles · saved');
+  });
+
+  /* ---------- video ---------- */
+  var recorder=null, chunks=[], recording=false, recStart=0, micOn=false, micStream=null;
+  var recBtn=document.getElementById('bRec');
+  var recDot=document.getElementById('recDot');
+  var recTime=document.getElementById('recTime');
+  var MAXMS=5*60*1000;
+
+  function pickMime(withAudio){
+    if(!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+    var mp4 = withAudio
+      ? ['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1,mp4a.40.2','video/mp4;codecs=h264,aac','video/mp4']
+      : ['video/mp4;codecs=avc1.42E01E','video/mp4;codecs=avc1','video/mp4;codecs=h264','video/mp4'];
+    var webm = withAudio
+      ? ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm']
+      : ['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    var list=(recFmt==='webm') ? webm.concat(mp4) : mp4.concat(webm);
+    var i;
+    for(i=0;i<list.length;i++) if(MediaRecorder.isTypeSupported(list[i])) return list[i];
+    return '';
+  }
+  function tickTime(){
+    var s=Math.floor((now()-recStart)/1000);
+    recTime.textContent=Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60);
+    if(now()-recStart>MAXMS) stopRec();
+  }
+  function startRec(){
+    if(!window.MediaRecorder){ toast('This browser cannot record video'); return; }
+    setupRecCanvas();
+    paintRec();
+    if(!recCan.captureStream){ toast('This browser cannot record video'); return; }
+    var s;
+    try { s=recCan.captureStream(30); } catch(e){ toast('Capture failed'); return; }
+    var withAudio=!!(micOn && micStream);
+    if(withAudio){
+      var at=micStream.getAudioTracks(),i;
+      for(i=0;i<at.length;i++) s.addTrack(at[i]);
+    }
+    var mime=pickMime(withAudio);
+    try {
+      recorder = mime ? new MediaRecorder(s,{ mimeType:mime, videoBitsPerSecond:10000000 })
+                      : new MediaRecorder(s);
+    } catch(e){
+      try { recorder=new MediaRecorder(s); }
+      catch(e2){ toast('Recorder unavailable'); return; }
+    }
+    chunks=[];
+    recorder.ondataavailable=function(ev){ if(ev.data && ev.data.size) chunks.push(ev.data); };
+    recorder.onstop=function(){
+      var type=(recorder && recorder.mimeType) ? recorder.mimeType : (mime||'video/webm');
+      var isMp4=type.indexOf('mp4')>-1;
+      var blob=new Blob(chunks,{ type: isMp4?'video/mp4':'video/webm' });
+      chunks=[];
+      var url=URL.createObjectURL(blob);
+      saveUrl(url,'mosaic-'+Date.now()+'.'+(isMp4?'mp4':'webm'));
+      setTimeout(function(){ URL.revokeObjectURL(url); },60000);
+      toast(isMp4 ? (recCan.width+'×'+recCan.height+' mp4 saved')
+                  : 'Saved as webm — this browser has no mp4 encoder');
+    };
+    try { recorder.start(1000); }
+    catch(e){ toast('Could not start recording'); return; }
+    recording=true; recStart=now();
+    recBtn.className='on'; recDot.className='on'; recTime.textContent='0:00';
+  }
+  function stopRec(){
+    if(!recording) return;
+    recording=false;
+    recBtn.className=''; recDot.className='';
+    try { recorder.stop(); } catch(e){}
+  }
+  recBtn.addEventListener('click', function(){ if(recording) stopRec(); else startRec(); });
+
+  document.getElementById('bMic').addEventListener('click', function(){
+    var self=this;
+    if(micOn){
+      micOn=false;
+      if(micStream){ var t=micStream.getTracks(),i; for(i=0;i<t.length;i++) t[i].stop(); micStream=null; }
+      self.className='b'; self.textContent='Sound off';
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){
+      micStream=s; micOn=true;
+      self.className='b on'; self.textContent='Sound on';
+    })['catch'](function(){ toast('Microphone refused'); });
+  });
+
+  /* ---------- sheet ---------- */
+  function openSheet(v){
+    sheet.className = v ? 'on' : '';
+    scrim.className = v ? 'on' : '';
+    document.getElementById('bSetup').className = v ? 'tab on' : 'tab';
+  }
+  document.getElementById('bSetup').addEventListener('click', function(){
+    openSheet(sheet.className!=='on');
+  });
+  document.getElementById('bClose').addEventListener('click', function(){ openSheet(false); });
+  scrim.addEventListener('click', function(){ openSheet(false); });
+
+  /* ---------- controls ---------- */
+  function seg(id,key,after){
+    var btns=document.getElementById(id).getElementsByTagName('button'), i;
+    for(i=0;i<btns.length;i++){
+      (function(b){
+        b.addEventListener('click', function(){
+          var j;
+          for(j=0;j<btns.length;j++) btns[j].className='b';
+          b.className='b on';
+          opt[key]=b.getAttribute('data-v');
+          if(after) after();
+        });
+      })(btns[i]);
+    }
+  }
+  seg('segMatch','match');
+  seg('segGround','ground', buildLut);
+
+  var reT=null;
+  function slide(id,out,key,rebuild){
+    var s=document.getElementById(id), o=document.getElementById(out);
+    s.addEventListener('input', function(){
+      opt[key]=parseInt(s.value,10);
+      o.textContent=opt[key];
+      if(rebuild){
+        if(reT) clearTimeout(reT);
+        reT=setTimeout(buildGrid, 80);
+      }
+    });
+  }
+  slide('sTile','vTile','tile',true);
+  slide('sGap','vGap','gap',false);
+  slide('sPunch','vPunch','punch',false);
+  slide('sSettle','vSettle','settle',false);
+
+  document.getElementById('bHold').addEventListener('click', function(){
+    held=!held;
+    this.className = held ? 'b on' : 'b';
+    this.textContent = held ? 'Held' : 'Hold';
+  });
+  document.getElementById('bFlip').addEventListener('click', function(){
+    facing = (facing==='user') ? 'environment' : 'user';
+    start();
+  });
+  document.getElementById('bFmt').addEventListener('click', function(){
+    recFmt = (recFmt==='mp4') ? 'webm' : 'mp4';
+    this.textContent = (recFmt==='mp4') ? 'MP4' : 'WebM';
+    this.className = (recFmt==='mp4') ? 'b on' : 'b';
+  });
+  document.getElementById('bAspect').addEventListener('click', function(){
+    recAspect = (recAspect==='reel')   ? 'square'
+              : (recAspect==='square') ? 'wide'
+              : (recAspect==='wide')   ? 'screen'
+                                       : 'reel';
+    this.textContent = recAspect==='reel'   ? 'Reel 9:16'
+                     : recAspect==='square' ? 'Square 1:1'
+                     : recAspect==='wide'   ? 'Wide 16:9'
+                                            : 'Screen';
+    setupRecCanvas();
+  });
+
+  /* while a control is being dragged, get the panel out of the way */
+  (function(){
+    var peekT=null;
+    function peek(on){
+      if(on){
+        if(peekT){ clearTimeout(peekT); peekT=null; }
+        sheet.style.opacity='.14';
+        scrim.style.opacity='0';
+      } else {
+        if(peekT) clearTimeout(peekT);
+        peekT=setTimeout(function(){
+          sheet.style.opacity='';
+          scrim.style.opacity='';
+        }, 240);
+      }
+    }
+    var rs=sheet.getElementsByTagName('input'), i;
+    for(i=0;i<rs.length;i++){
+      rs[i].addEventListener('touchstart', function(){ peek(true); }, false);
+      rs[i].addEventListener('mousedown',  function(){ peek(true); }, false);
+    }
+    window.addEventListener('touchend', function(){ peek(false); }, false);
+    window.addEventListener('mouseup',  function(){ peek(false); }, false);
+  })();
+
+  document.getElementById('bStart').addEventListener('click', start);
+
+  resize();
+})();
+</script>
+</body>
+</html>
